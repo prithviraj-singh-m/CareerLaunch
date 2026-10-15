@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # AI Career Launchpad
 
 A career preparation MVP built with Next.js and FastAPI. The AI features call the configured Nexus OpenAI-compatible API from the backend; credentials never enter browser code.
@@ -74,3 +75,6 @@ The API uses multipart uploads, synchronous SQLite, temporary PDF extraction, an
 - RAG retrieval uses per-user keyword matching, not vector embeddings.
 - Nexus model access and model-specific structured JSON support require validation with your account.
 - The optional MCP integration and speech-to-text are not included.
+=======
+# CareerLaunch
+>>>>>>> 211f588348977794307e63a4bb99883002aa2c7e
