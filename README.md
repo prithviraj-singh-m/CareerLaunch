@@ -1,25 +1,14 @@
-<<<<<<< HEAD
 # AI Career Launchpad
 
-A career preparation MVP built with Next.js and FastAPI. The AI features call the configured Nexus OpenAI-compatible API from the backend; credentials never enter browser code.
+Next.js frontend with a FastAPI backend for resume analysis, career mentoring, interview practice, and study document Q&A. AI credentials and resume contents stay on the backend.
 
-## Features
+## Local development
 
-- Responsive career dashboard and landing workspace with honest empty states.
-- PDF/TXT resume and job-description assessment, validated against a Pydantic schema.
-- Career mentor with recent prompt context.
-- Resume-driven learning plan with completion tracking.
-- Role and mode specific mock interview questions and structured answer feedback.
-- PDF/TXT study document ingestion, overlapping chunks, per-user keyword retrieval, source excerpts, and grounded AI answers. This MVP does not generate embeddings; it explicitly reports keyword retrieval.
-- Server endpoints for dashboard data and roadmap updates.
+Requirements: Node.js 18+ and Python 3.10+.
 
-## Requirements and local setup
-
-Node.js 18+ and Python 3.10+.
-
-1. In the repository root, run `npm install`.
-2. In `backend`, create `.env` from `.env.example`. Set `NEXUS_API_KEY` and `NEXUS_MODEL` to values enabled for your Nexus account. The model name is not assumed or checked against an account at startup.
-3. Install and start the API:
+1. Install frontend packages from the repository root with `npm install`.
+2. In `backend`, copy `.env.example` to `.env`; set the Nexus credentials and Supabase project URL/anon key.
+3. Install/start the backend:
 
    ```powershell
    cd backend
@@ -29,52 +18,38 @@ Node.js 18+ and Python 3.10+.
    uvicorn main:app --reload --port 8000
    ```
 
-4. In another terminal, from the repository root run `npm run dev` and open http://localhost:3000.
+4. Set root `.env.local` from `.env.example`, then run `npm run dev` from the repository root.
 
-AI requests return a clear 503 if `NEXUS_API_KEY` or `NEXUS_MODEL` is missing. Configure these before using analysis, mentor, interview, or grounded answer generation. `NEXUS_BASE_URL` defaults to `https://nexusapi.navigatelabs.ai`.
+SQLite is the local default. The backend also supports PostgreSQL using `DATABASE_URL`; install dependencies from `backend/requirements.txt` after updating it.
 
-## Environment variables
+## Supabase database
 
-`backend/.env` uses `NEXUS_API_KEY`, `NEXUS_BASE_URL`, `NEXUS_MODEL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `DATABASE_URL`, `FRONTEND_ORIGIN`, `MAX_UPLOAD_MB`, and `APP_REQUIRE_AUTH`. Authentication is required by default. Only set `APP_REQUIRE_AUTH=false` for isolated local development without sign-in. The data adapter is SQLite. Do not put provider keys in `NEXT_PUBLIC_*` variables.
+Supabase provides both email/password authentication and managed PostgreSQL. Run `supabase/schema.sql` in the Supabase SQL Editor to create the app tables and row-level security policies. If you previously ran the older schema that created `roadmap_tasks` and `document_chunks`, run `supabase/migrate_legacy_schema.sql` instead; it keeps existing records while adapting the tables to the backend. The backend creates the current tables at startup too.
 
-The frontend uses `NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`), and optional `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` for its email/password sign-in and sign-up panel. Supabase anon keys are intended for browser use; keep the service-role key out of the frontend.
+Use the Supabase **Postgres connection string** for backend `DATABASE_URL` (Project Settings → Database → Connect). For the Vercel serverless backend, choose the **Transaction pooler**. Replace the password placeholder and URL-encode special characters in the password. Never expose this URL or database password in frontend variables.
 
-## Persistence and authentication limits
+The backend verifies each bearer token with Supabase Auth and scopes every database query by the verified Supabase user ID. Keep `APP_REQUIRE_AUTH=true`. `SUPABASE_URL` and `SUPABASE_ANON_KEY` are used by the backend to validate sessions. The frontend uses `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` for sign-in; the anon key is intended for browser use. Never use a service-role key in the frontend.
 
-The implemented MVP persists to SQLite, with records partitioned by a server-verified Supabase user ID when backend `SUPABASE_URL` and `SUPABASE_ANON_KEY` are configured. The browser blocks all workspace features until email/password sign-in succeeds. Supabase Auth must have email/password enabled. The API also rejects feature requests without a valid bearer token. SQLite files on serverless Vercel are ephemeral; use a persistent backend host and managed PostgreSQL for durable production data (the supplied schema is a starting point).
+## Deploy
 
-## Checks
+### Vercel backend
 
-Run `npm run build` for the frontend production build. The API can be checked with `python -m compileall backend` and `python -m unittest discover -s backend/tests -v`. API docs appear at http://localhost:8000/docs while running.
+Deploy the backend as a **separate Vercel project** from this same Git repository:
 
-Automated tests use mocked provider calls; no real Nexus account is available in this repository, so real provider compatibility remains unverified.
-
-## Supabase setup
-
-1. Create a Supabase project.
-2. In SQL Editor, run `supabase/schema.sql`. It creates user-owned tables and enables row-level security. Keep user and file data private.
-3. Enable email/password in Supabase Auth. For local signup confirmations, set **Site URL** to your local frontend (usually `http://localhost:3000`) and add both `http://localhost:3000` and `http://localhost:3001` to allowed redirect URLs. The sign-up form redirects to the actual frontend origin. Set matching backend `SUPABASE_URL`/`SUPABASE_ANON_KEY` and frontend `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`; the sign-in panel sends bearer tokens to the API, which verifies them with Supabase Auth.
-4. Before production, replace the SQLite data adapter with PostgreSQL/Supabase storage operations. The MVP is deliberately fail-closed when `APP_ENV=production` and auth is not configured.
-
-## Deployment
+1. In Vercel, choose **Add New → Project**, import the repository already used by the frontend, and set **Root Directory** to `backend`.
+2. Vercel detects the FastAPI app through `backend/index.py`. Keep the Python requirements in `backend/requirements.txt`; no Uvicorn start command is needed for Vercel Functions.
+3. Add backend-only environment variables in this Vercel project: `NEXUS_API_KEY`, `NEXUS_BASE_URL`, `NEXUS_MODEL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `DATABASE_URL`, `FRONTEND_ORIGIN`, `APP_REQUIRE_AUTH=true`, and `MAX_UPLOAD_MB=4`.
+4. Set `FRONTEND_ORIGIN` to the exact deployed frontend origin, for example `https://your-project.vercel.app` (no trailing slash). Add custom frontend domains as comma-separated origins. `DATABASE_URL` must use Supabase's Transaction pooler; never use the local SQLite URL in production.
+5. Deploy. Check the backend's `/health` endpoint; it should report `database: postgresql`, AI configured, and Supabase auth mode.
 
 ### Vercel frontend
 
-1. Import the repository in Vercel, set the project root to the repository root, and deploy with the default Next.js build (`npm run build`).
-2. Set `NEXT_PUBLIC_API_URL` to the deployed FastAPI origin, then redeploy.
-3. Configure the backend CORS `FRONTEND_ORIGIN` to the exact Vercel site origin.
+In the existing frontend Vercel project, set `NEXT_PUBLIC_API_URL` to the new backend project's URL (no trailing slash), plus `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Redeploy the frontend. In Supabase Authentication URL settings, set Site URL to the frontend origin and add it (and any custom frontend domain) to allowed redirect URLs.
 
-### FastAPI backend
+The API uses Vercel's Python runtime as a serverless FastAPI function. Keep `MAX_UPLOAD_MB` at 4 or lower because Vercel Functions have a 4.5 MB request body limit. For local development, SQLite remains the default and the upload limit can be overridden in `backend/.env`.
 
-The API uses multipart uploads, synchronous SQLite, temporary PDF extraction, and a 45-second AI call timeout. It is not configured for Vercel serverless persistence/runtime. Deploy on a small persistent Python host (for example Render or Railway) with `uvicorn main:app --host 0.0.0.0 --port $PORT`, and set secrets there. For multi-user production, complete the documented auth/Postgres migration first. No deployment has been performed from this repository.
+## Notes
 
-## Current limitations
-
-- Supabase Auth credentials are required to use the app by default. `APP_REQUIRE_AUTH=false` is an explicit local-only test bypass.
-- SQLite local persistence only; no durable serverless or multi-instance data store.
-- RAG retrieval uses per-user keyword matching, not vector embeddings.
-- Nexus model access and model-specific structured JSON support require validation with your account.
-- The optional MCP integration and speech-to-text are not included.
-=======
-# CareerLaunch
->>>>>>> 211f588348977794307e63a4bb99883002aa2c7e
+- Uploaded PDF/TXT files are read in memory; extracted document chunks are stored in PostgreSQL.
+- The API currently uses per-user keyword retrieval for study documents, not vector embeddings.
+- Provider access/model support depends on the Nexus account configuration.

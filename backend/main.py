@@ -15,7 +15,8 @@ from pypdf import PdfReader
 
 load_dotenv(Path(__file__).parent / '.env')
 DATABASE_URL=os.getenv('DATABASE_URL','sqlite:///./career_launchpad.db')
-MAX_BYTES=int(os.getenv('MAX_UPLOAD_MB','5'))*1024*1024
+USE_POSTGRES=DATABASE_URL.startswith(('postgres://','postgresql://'))
+MAX_BYTES=int(os.getenv('MAX_UPLOAD_MB','4'))*1024*1024
 app=FastAPI(title='AI Career Launchpad API',version='1.0.0')
 origins=[x.strip() for x in os.getenv('FRONTEND_ORIGIN','http://localhost:3000').split(',') if x.strip()]
 app.add_middleware(CORSMiddleware,allow_origins=origins,allow_credentials=False,allow_methods=['GET','POST','OPTIONS'],allow_headers=['Content-Type','X-User-Id','Authorization'])
@@ -55,21 +56,53 @@ def db_path()->str:
     if DATABASE_URL.startswith('sqlite:///'):
         p=DATABASE_URL[len('sqlite:///'):]
         return str((Path(__file__).parent/p).resolve()) if not Path(p).is_absolute() else p
-    raise RuntimeError('This MVP currently uses SQLite. Use a persistent volume or migrate to managed PostgreSQL before production.')
+    raise RuntimeError('DATABASE_URL must use sqlite:/// for local development or a postgres:// / postgresql:// connection URL.')
+
+class DatabaseConnection:
+    """Small adapter so the API can use the same parameterized SQL on SQLite and Postgres."""
+    def __init__(self, connection, postgres:bool=False):
+        self.connection=connection
+        self.postgres=postgres
+    def execute(self,sql:str,params=()):
+        return self.connection.execute(sql.replace('?','%s') if self.postgres else sql,params)
+    def executescript(self,sql:str):
+        if not self.postgres:
+            return self.connection.executescript(sql)
+        for statement in sql.split(';'):
+            if statement.strip(): self.connection.execute(statement)
+    def commit(self): return self.connection.commit()
+    def close(self): return self.connection.close()
+
 @contextmanager
 def connect():
-    con=sqlite3.connect(db_path(),timeout=10); con.row_factory=sqlite3.Row
+    if USE_POSTGRES:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as e:
+            raise RuntimeError('PostgreSQL is configured but psycopg is not installed. Install backend/requirements.txt.') from e
+        # Supabase's transaction pooler may assign a different server connection
+        # between transactions, so don't use session-scoped prepared statements.
+        con=DatabaseConnection(psycopg.connect(DATABASE_URL,connect_timeout=10,row_factory=dict_row,prepare_threshold=None),postgres=True)
+    else:
+        raw=sqlite3.connect(db_path(),timeout=10); raw.row_factory=sqlite3.Row
+        con=DatabaseConnection(raw)
     try:
         yield con
         con.commit()
     finally: con.close()
 def init_db():
     with connect() as c:
-        c.executescript('''CREATE TABLE IF NOT EXISTS analyses(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        c.executescript('''CREATE TABLE IF NOT EXISTS analyses(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,payload TEXT NOT NULL,created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE IF NOT EXISTS roadmap(user_id TEXT NOT NULL,task_index INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(user_id,task_index));
-        CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,filename TEXT NOT NULL,chunks TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE IF NOT EXISTS interviews(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);''')
+        CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,filename TEXT NOT NULL,chunks TEXT NOT NULL,created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,payload TEXT NOT NULL,created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS interviews(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,payload TEXT NOT NULL,created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);''')
+        if USE_POSTGRES:
+            for table in ('analyses','roadmap','documents','conversations','interviews'):
+                c.execute(f'ALTER TABLE {table} ENABLE ROW LEVEL SECURITY')
+                policy=f'{table}_owner_access'
+                c.execute(f'DO $$ BEGIN CREATE POLICY {policy} ON {table} FOR ALL USING (auth.uid()::text = user_id) WITH CHECK (auth.uid()::text = user_id); EXCEPTION WHEN duplicate_object THEN NULL; END $$')
 init_db()
 
 def current_user(x_user_id:str|None,authorization:str|None)->str:
@@ -125,7 +158,7 @@ def parse_json(raw:str)->dict[str,Any]:
     except Exception as e: raise HTTPException(502,'The AI returned an unreadable response. Please try again.') from e
 
 @app.get('/health')
-def health(): return {'status':'ok','ai_configured':bool(os.getenv('NEXUS_API_KEY') and os.getenv('NEXUS_MODEL')),'auth_required':os.getenv('APP_REQUIRE_AUTH','true').strip().lower() not in ('false','0','no'),'database':'sqlite-local','auth_mode':'supabase' if os.getenv('SUPABASE_URL') and os.getenv('SUPABASE_ANON_KEY') else 'unconfigured'}
+def health(): return {'status':'ok','ai_configured':bool(os.getenv('NEXUS_API_KEY') and os.getenv('NEXUS_MODEL')),'auth_required':os.getenv('APP_REQUIRE_AUTH','true').strip().lower() not in ('false','0','no'),'database':'postgresql' if USE_POSTGRES else 'sqlite-local','auth_mode':'supabase' if os.getenv('SUPABASE_URL') and os.getenv('SUPABASE_ANON_KEY') else 'unconfigured'}
 
 @app.post('/api/analyze',response_model=Analysis)
 async def analyze(resume:UploadFile=File(...),job_description:str=Form(...),x_user_id:str|None=Header(None),authorization:str|None=Header(None)):
